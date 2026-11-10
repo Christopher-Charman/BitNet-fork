@@ -26,3 +26,7 @@ Independent semantic review of the patch and tests; exact-artifact readback; bro
 ## Published artifact readback — 10 November 2026
 
 The published patch script was fetched from GitHub and applied to the original pinned llama.cpp source. The resulting `quants.c` matched the locally qualified corrected source **byte-for-byte** (`cmp`: PASS). The expanded published test suite passed 128-, 256-, and 512-element roundtrip and encoded GEMV parity cases on both the AVX2 and scalar CPU-only libraries (12 checks total). The pull request is ready for independent review; no reviewer approval or production release is implied.
+
+## Extended SIMD group-boundary verification
+
+The published regression was extended to 4096 elements (one complete 32-block SIMD group) and 4224 elements (a full group plus a 128-element tail). Both AVX2 and scalar builds passed packing roundtrip and encoded GEMV parity for all five lengths: 128, 256, 512, 4096 and 4224, **20 numerical checks total**. The source remains unmerged; the tests exercise numerical kernel correctness, not full-model quality or comparative performance.
