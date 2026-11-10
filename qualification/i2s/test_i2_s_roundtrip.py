@@ -21,8 +21,8 @@ lib.ggml_vec_dot_i2_i8_s.argtypes = [
     ctypes.c_size_t, ctypes.c_void_p, ctypes.c_size_t,
     ctypes.c_void_p, ctypes.c_size_t, ctypes.c_int,
 ]
-for n in (128, 256):
-    expected = [float((-1, 0, 1, 0, 1, -1, 0, 1)[i % 8]) for i in range(n)]
+for n in (128, 256, 512):
+    expected = [float((-1, 0, 1, 0, 1, -1, 0, 1)[(i * 17 + i // 32) % 8]) for i in range(n)]
     src = (ctypes.c_float * n)(*expected)
     packed = ctypes.create_string_buffer(n // 4 + 32)
     decoded = (ctypes.c_float * n)()
