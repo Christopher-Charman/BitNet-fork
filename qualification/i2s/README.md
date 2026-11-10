@@ -22,3 +22,7 @@ Local qualified source commit: `6f7470433b156572f8e68513c44f06203131accf` in an 
 ## Acceptance remaining
 
 Independent semantic review of the patch and tests; exact-artifact readback; broader GEMM and model-level functional qualification; quality-preserving performance comparisons (useful throughput per CPU-second, RSS and latency). Merge or production activation is not authorized by this source-only publication.
+
+## Published artifact readback — 10 November 2026
+
+The published patch script was fetched from GitHub and applied to the original pinned llama.cpp source. The resulting `quants.c` matched the locally qualified corrected source **byte-for-byte** (`cmp`: PASS). The expanded published test suite passed 128-, 256-, and 512-element roundtrip and encoded GEMV parity cases on both the AVX2 and scalar CPU-only libraries (12 checks total). The pull request is ready for independent review; no reviewer approval or production release is implied.
