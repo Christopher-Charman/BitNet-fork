@@ -30,3 +30,9 @@ The published patch script was fetched from GitHub and applied to the original p
 ## Extended SIMD group-boundary verification
 
 The published regression was extended to 4096 elements (one complete 32-block SIMD group) and 4224 elements (a full group plus a 128-element tail). Both AVX2 and scalar builds passed packing roundtrip and encoded GEMV parity for all five lengths: 128, 256, 512, 4096 and 4224, **20 numerical checks total**. The source remains unmerged; the tests exercise numerical kernel correctness, not full-model quality or comparative performance.
+
+## Multirow GEMM acceptance and scalar regression — 11 November 2026
+
+The newly published `test_i2_s_gemm.py` exposed an additional functional defect in the scalar CPU fallback: multirow GEMM forwarded batched work to a scalar dot-product routine that did not implement the required output and activation strides. The first 4×4 test returned an incorrect value (-6 instead of 4). The isolated fix performs one encoded dot per output cell with explicit row/column addressing, preserving the SIMD implementation.
+
+The corrected scalar build and the original AVX2 build both passed **nine GEMM configurations**: inner dimensions 128, 256 and 4096, crossed with 4×4, 5×3 and 3×5 row/column shapes (18 GEMM configurations across both builds). The published patch was fetched and applied to both pinned original C source files; each resulting file matched the qualified local source byte-for-byte. These checks supplement the prior 20 packing/GEMV checks. Independent review and model-level performance/quality qualification remain required before merge or production deployment.
