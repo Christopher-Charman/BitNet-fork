@@ -70,3 +70,16 @@ Source inspection identified an out-of-bounds final weight-row tile in `ggml-cpu
 Retrieved the official `microsoft/bitnet-b1.58-2B-4T-gguf` `ggml-model-i2_s.gguf` (1,187,801,280 bytes) into the isolated qualification build directory, SHA-256 `4221b252fdd5fd25e15847adfeb5ee88886506ba50b8a34548374492884c2162`. Built `llama-cli` against the locally corrected CPU source with Miniconda and an explicit system `libgomp` link path. A first CLI run reached an interactive prompt and exceeded the bounded job duration; the corrected `--single-turn --simple-io` invocation exited successfully with 2 CPU threads, context 512 and 16 generated tokens. Observed reported rates were **30.6 prompt tokens/s** and **7.2 generated tokens/s** on this host. For the prompt `Write the word READY.`, the output was `Write the word READY / The word: 3 / 3 / I:` rather than a compliant answer. Thus **model load and generation are verified**, but **instruction-following quality is not qualified**. This is one short smoke sample, not a model capability verdict. No model or runtime default was changed; artifact is isolated in the qualification workspace.
 
 A second single-turn smoke used the model's conversation mode with `Reply with exactly READY.` and 48 generated tokens. The model responded repetitively (`I'm ready to help...`) rather than exactly `READY`; observed rates were 30.1 prompt tokens/s and 6.7 generation tokens/s. This establishes that the initial noncompliant result was not solely due to omitting conversation mode. The official artifact loads and generates on the corrected CPU build, but strict instruction-following has not met even this minimal probe. A complete independent acceptance suite and reviewer approval remain required; no production activation.
+
+## Deterministic model acceptance probe — 11 November 2026
+
+Ran the official SHA-256-pinned I2_S GGUF on the locally corrected `llama-cli` with CPU-only execution, two threads, 512-token context, `--conversation --single-turn --simple-io --no-warmup --temp 0 --seed 42`, and at most 48 generated tokens per case. Four independently bounded cases all exited normally but **failed functional acceptance**:
+
+| Case | Expected | Observed |
+| --- | --- | --- |
+| Exact instruction | `READY` only | Repetitive explanation instead |
+| Arithmetic | `12` only for 7+5 | `10` repeated |
+| JSON | exactly `{"ok":true}` | malformed/repeated JSON fragments |
+| Python coding | function `square(x)` returning `x*x` | repeated prompt rather than code |
+
+Execution times were 18.53, 9.78, 9.60, and 9.82 seconds, respectively, in this bounded host run. This is **0/4 functional acceptance**, not evidence of general model quality or proof of the failure's root cause. Do not promote this BitNet I2_S artifact to the CPU coding-agent backend, or degrade existing model capabilities to make it pass. Preserve the independently verified kernel fixes for source review. The exact CLI outputs are in the isolated qualification workspace at `build-cpu-qualification/bitnet-deterministic-acceptance.json`. Further work must isolate model-versus-runtime causes before any production proposal.
