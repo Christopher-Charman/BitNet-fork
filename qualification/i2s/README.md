@@ -40,3 +40,15 @@ The corrected scalar build and the original AVX2 build both passed **nine GEMM c
 ## GEMV batch-boundary verification — 11 November 2026
 
 The published `test_i2_s_gemv_rows.py` exercised 1, 4, 16, 17 and 32 weight rows at inner dimensions 128, 256 and 4096. All **30 configurations** (15 per AVX2/scalar build) passed encoded-dot parity, including both sides of the 16-row batching boundary. Across the published focused suites, the verified total is 68 configuration checks: 20 packing/single-row GEMV, 18 GEMM and 30 batched GEMV. This is kernel-level numerical evidence, not full-model or production acceptance.
+
+## Bounded CPU kernel microbenchmark — 11 November 2026
+
+The published `benchmark_i2_s_gemm.py` was retrieved from GitHub and run with `nice -n 19` against both locally built CPU backends. Each configuration used three warmups and 15 timed samples, with 8 weight rows and 8 activation columns. The measured **median kernel call latency** was:
+
+| Inner dimension | AVX2 | Scalar |
+| --- | ---: | ---: |
+| 128 | 2.20 µs | 31.90 µs |
+| 512 | 2.50 µs | 128.90 µs |
+| 4096 | 4.40 µs | 1022.61 µs |
+
+These are short, host-dependent microbenchmarks, not end-to-end inference throughput, CPU consumption, model quality or a release criterion. The scalar 4096-element samples were variable (minimum 621.80 µs); reproduce on a stable isolated host before making architecture-level performance decisions. No inference defaults were changed.
