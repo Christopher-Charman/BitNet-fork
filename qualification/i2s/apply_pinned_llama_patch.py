@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Apply the isolated I2_S source correction to the pinned llama.cpp submodule.
 
-This script modifies only 3rdparty/llama.cpp/ggml/src/ggml-cpu/quants.c.
+This script modifies three pinned ggml CPU source files (quants.c, ggml-cpu-i2s.c and ggml-cpu.c).
 Run from the BitNet-fork repository root. Requires the pinned submodule checkout.
 """
 from pathlib import Path
@@ -65,3 +65,20 @@ replacement = """    // Portable scalar path: the scalar vector dot only support
 """
 gemm_path.write_text(gemm_source[:start] + replacement + gemm_source[end:])
 print(f"Updated {gemm_path}")
+
+# The non-repacked I2_S matmul path rounded its final row boundary
+# upwards to a multiple of four without clamping it to the tensor's
+# actual row count. For ne01=5 it accessed rows 5..7 out of bounds.
+matmul_path = Path("3rdparty/llama.cpp/ggml/src/ggml-cpu/ggml-cpu.c")
+matmul_source = matmul_path.read_text()
+anchor = """        src0_end   = (src0_end   % matmul_num_cols) ? src0_end   + matmul_num_cols - (src0_end   % matmul_num_cols) : src0_end;
+        if (src0_start >= src0_end) return;"""
+corrected = """        src0_end   = (src0_end   % matmul_num_cols) ? src0_end   + matmul_num_cols - (src0_end   % matmul_num_cols) : src0_end;
+        // The final tile can contain fewer than four physical weight rows.
+        // Never read or write beyond the actual tensor row count.
+        src0_end   = MIN(src0_end, ne01);
+        if (src0_start >= src0_end) return;"""
+if matmul_source.count(anchor) != 1:
+    raise SystemExit("Expected exactly one non-repacked I2_S row-boundary block")
+matmul_path.write_text(matmul_source.replace(anchor, corrected))
+print(f"Updated {matmul_path}")
