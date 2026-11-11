@@ -43,3 +43,25 @@ for before, after in replacements:
     source = source.replace(before, after)
 path.write_text(source)
 print(f"Updated {path}")
+
+# The portable GEMM fallback previously forwarded multirow/multicolumn
+# operations to a scalar dot routine that only supports one result.
+gemm_path = Path("3rdparty/llama.cpp/ggml/src/ggml-cpu/ggml-cpu-i2s.c")
+gemm_source = gemm_path.read_text()
+function_start = gemm_source.index("void ggml_gemm_i2_i8_s(")
+start = gemm_source.index("#if defined(ACT_PARALLEL)", function_start)
+end = gemm_source.index("#endif // __AVX2__", start)
+old = gemm_source[start:end]
+assert "ggml_vec_dot_i2_i8_s" in old and "for (int64_t r0" in old
+replacement = """    // Portable scalar path: the scalar vector dot only supports nrc=1.
+    // Each output is indexed as column * bs + weight row.
+    for (int64_t c = 0; c < nr; ++c) {
+        for (int64_t r = 0; r < nc; ++r) {
+            ggml_vec_dot_i2_i8_s(n, s + c * bs + r, 1,
+                (const uint8_t *)vx + r * n / 4, n,
+                (const int8_t *)vy + c * n, 0, 1);
+        }
+    }
+"""
+gemm_path.write_text(gemm_source[:start] + replacement + gemm_source[end:])
+print(f"Updated {gemm_path}")
