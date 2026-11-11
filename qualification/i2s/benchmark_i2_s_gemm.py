@@ -15,10 +15,14 @@ lib.ggml_gemm_i2_i8_s.argtypes = [ctypes.c_int, ctypes.POINTER(ctypes.c_float),
     ctypes.c_size_t, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_int, ctypes.c_int]
 for n, nc, nr in ((128, 8, 8), (512, 8, 8), (4096, 8, 8)):
     packed = ctypes.create_string_buffer(n * nc // 4 + 64)
+    # Quantize each row into a separate temporary buffer: the quantizer
+    # appends a scale after the packed row, overlapping the next row otherwise.
     for row in range(nc):
         values = (ctypes.c_float * n)(
             *(float((-1, 0, 1)[(i * 17 + row + i // 32) % 3]) for i in range(n)))
-        lib.quantize_i2_s(values, ctypes.byref(packed, row * n // 4), 1, n, None)
+        row_packed = ctypes.create_string_buffer(n // 4 + 32)
+        lib.quantize_i2_s(values, row_packed, 1, n, None)
+        ctypes.memmove(ctypes.byref(packed, row * n // 4), row_packed, n // 4)
     activations = (ctypes.c_int8 * (n * nr))(
         *(int((i + col) % 7 - 3) for col in range(nr) for i in range(n)))
     output = (ctypes.c_float * (nc * nr))()
