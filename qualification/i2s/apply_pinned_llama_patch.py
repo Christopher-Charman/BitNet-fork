@@ -82,3 +82,24 @@ if matmul_source.count(anchor) != 1:
     raise SystemExit("Expected exactly one non-repacked I2_S row-boundary block")
 matmul_path.write_text(matmul_source.replace(anchor, corrected))
 print(f"Updated {matmul_path}")
+
+# AVX2 without VNNI: adding four signed 16-bit partial products before
+# widening silently wraps on high-magnitude activations. Widen each pair
+# into 32-bit lanes first, then accumulate in 32-bit arithmetic.
+# Applies to the 4x4 GEMM, remaining-column GEMM and interleaved GEMM.
+wide_source = gemm_path.read_text()
+import re
+pattern = re.compile(r'(?P<indent>\s*)__m256i sum16 = _mm256_add_epi16\(_mm256_add_epi16\(d0, d1\),\s*_mm256_add_epi16\(d2, d3\)\);\s*acc(?P<idx>\[i\]\[j\]|_rem\[i\]) = _mm256_add_epi32\(acc(?P=idx),\s*_mm256_madd_epi16\(sum16, one16\)\);')
+def widen(m):
+    idx = m.group('idx')
+    indent = m.group('indent').split('\\n')[-1]
+    return ('\\n' + indent + '// Avoid 16-bit wrap when summing four activation lanes.\\n'
+            + indent + '__m256i sum32 = _mm256_add_epi32(\\n'
+            + indent + '    _mm256_add_epi32(_mm256_madd_epi16(d0, one16), _mm256_madd_epi16(d1, one16)),\\n'
+            + indent + '    _mm256_add_epi32(_mm256_madd_epi16(d2, one16), _mm256_madd_epi16(d3, one16)));\\n'
+            + indent + 'acc' + idx + ' = _mm256_add_epi32(acc' + idx + ', sum32);')
+wide_source, count = pattern.subn(widen, wide_source)
+if count != 3:
+    raise SystemExit(f'Expected three AVX2 non-VNNI 16-bit reduction sites, found {count}')
+gemm_path.write_text(wide_source)
+print(f'Updated {count} non-VNNI AVX2 accumulation sites in {gemm_path}')
