@@ -56,3 +56,7 @@ These are short, host-dependent microbenchmarks, not end-to-end inference throug
 ## Signed activation stress — 11 November 2026
 
 The published `test_i2_s_signed_extremes.py` passed 10 additional GEMM configurations (five signed activation magnitudes × AVX2 and scalar). The magnitudes 3, 31, 63, 100 and 127 exercise the upper signed-int8 range at inner dimension 4096. All 4×4 output cells matched the integer encoded-dot reference. The cumulative focused configuration count is now **78** (68 prior plus 10 signed-int8 stress cases). No suitable full BitNet I2_S model artifact was located in the bounded local model search; model-level qualification is still outstanding.
+
+## Maximum-positive accumulation — 11 November 2026
+
+Published `test_i2_s_max_positive.py` was retrieved from the PR branch and passed on both AVX2 and scalar builds at inner dimensions 128 and 4096. Every 4×4 output cell matched encoded reference values 32,512 and 1,040,384 respectively. This adds four passing kernel configurations, for **82** focused configurations in total. The current PR has no submitted independent GitHub review. The established owned reviewer route must independently assess the exact PR head; numerical tests are not a substitute for semantic approval.
