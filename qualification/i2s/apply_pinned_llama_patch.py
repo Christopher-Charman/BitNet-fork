@@ -82,3 +82,17 @@ if matmul_source.count(anchor) != 1:
     raise SystemExit("Expected exactly one non-repacked I2_S row-boundary block")
 matmul_path.write_text(matmul_source.replace(anchor, corrected))
 print(f"Updated {matmul_path}")
+
+# The GEMV loop dispatches blocks of 16 rows, but its final block may
+# contain fewer rows. Passing nrc=16 to the vector-dot kernel reads past
+# the weight tensor and writes beyond the output tensor for tails 1..15.
+# Clamp the final dispatch to the physical row count.
+gemv_source = gemm_path.read_text()
+gemv_anchor = """        ggml_vec_dot_i2_i8_s(n, s + iir0, 1, (const uint8_t *)vx + iir0 * n / 4, n, vy, 0, blck_0);"""
+gemv_fix = """        const int64_t rows_remaining = nc - iir0;
+        const int64_t rows_this_block = rows_remaining < blck_0 ? rows_remaining : blck_0;
+        ggml_vec_dot_i2_i8_s(n, s + iir0, 1, (const uint8_t *)vx + iir0 * n / 4, n, vy, 0, (int)rows_this_block);"""
+if gemv_source.count(gemv_anchor) != 1:
+    raise SystemExit("Expected exactly one GEMV 16-row dispatch")
+gemm_path.write_text(gemv_source.replace(gemv_anchor, gemv_fix))
+print(f"Clamped final GEMV row block in {gemm_path}")
