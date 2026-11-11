@@ -1,0 +1,137 @@
+# BitNet I2_S source qualification — 10 November 2026
+
+## Scope and evidence
+
+Source-only candidate for `Christopher-Charman/BitNet-fork` at `0b341e582afbf9e1011f24744b554c96a3477eb5`, with pinned `3rdparty/llama.cpp` at `390c307752ab78fd8189f359d6954c9ba1be74af`. No production model, service, or inference default is changed.
+
+The original `quantize_i2_s` packs four adjacent values per byte. `dequantize_row_i2_s` and the AVX2 GEMV consumer expect a four-lane 128-value layout. An initial 128-element roundtrip produced **88 mismatches**.
+
+The scalar dot fallback additionally used a signed ternary map despite the shared caller subtracting the activation sum from an encoded 0/1/2 dot. The source-only correction aligns quantization, dequantization, scalar and SIMD contracts.
+
+## Reproduce
+
+1. Check out the pinned BitNet-fork commit and its pinned llama.cpp submodule.
+2. Run `python qualification/i2s/apply_pinned_llama_patch.py` from the repository root.
+3. Configure and build `ggml-cpu` with CPU-only CMake settings. For scalar validation additionally set `GGML_NATIVE=OFF GGML_AVX=OFF GGML_AVX2=OFF GGML_AVX512=OFF` (CMake `-D` flags).
+4. Set `BITNET_GGML_CPU_LIB` to the built `libggml-cpu.so` and run `python qualification/i2s/test_i2_s_roundtrip.py`.
+
+The isolated Fasthosts qualification completed two builds: AVX2 and scalar. Both passed roundtrip and encoded GEMV parity for 128 and 256 values (four checks per build). Builds used a single low-priority CPU job and left the existing public service health endpoints returning HTTP 200.
+
+Local qualified source commit: `6f7470433b156572f8e68513c44f06203131accf` in an isolated submodule worktree. The parent repository tracks the upstream submodule as a Git link, so this PR publishes a reproducible patch script and tests rather than incorrectly claiming that a submodule change has been integrated.
+
+## Acceptance remaining
+
+Independent semantic review of the patch and tests; exact-artifact readback; broader GEMM and model-level functional qualification; quality-preserving performance comparisons (useful throughput per CPU-second, RSS and latency). Merge or production activation is not authorized by this source-only publication.
+
+## Published artifact readback — 10 November 2026
+
+The published patch script was fetched from GitHub and applied to the original pinned llama.cpp source. The resulting `quants.c` matched the locally qualified corrected source **byte-for-byte** (`cmp`: PASS). The expanded published test suite passed 128-, 256-, and 512-element roundtrip and encoded GEMV parity cases on both the AVX2 and scalar CPU-only libraries (12 checks total). The pull request is ready for independent review; no reviewer approval or production release is implied.
+
+## Extended SIMD group-boundary verification
+
+The published regression was extended to 4096 elements (one complete 32-block SIMD group) and 4224 elements (a full group plus a 128-element tail). Both AVX2 and scalar builds passed packing roundtrip and encoded GEMV parity for all five lengths: 128, 256, 512, 4096 and 4224, **20 numerical checks total**. The source remains unmerged; the tests exercise numerical kernel correctness, not full-model quality or comparative performance.
+
+## Multirow GEMM acceptance and scalar regression — 11 November 2026
+
+The newly published `test_i2_s_gemm.py` exposed an additional functional defect in the scalar CPU fallback: multirow GEMM forwarded batched work to a scalar dot-product routine that did not implement the required output and activation strides. The first 4×4 test returned an incorrect value (-6 instead of 4). The isolated fix performs one encoded dot per output cell with explicit row/column addressing, preserving the SIMD implementation.
+
+The corrected scalar build and the original AVX2 build both passed **nine GEMM configurations**: inner dimensions 128, 256 and 4096, crossed with 4×4, 5×3 and 3×5 row/column shapes (18 GEMM configurations across both builds). The published patch was fetched and applied to both pinned original C source files; each resulting file matched the qualified local source byte-for-byte. These checks supplement the prior 20 packing/GEMV checks. Independent review and model-level performance/quality qualification remain required before merge or production deployment.
+
+## GEMV batch-boundary verification — 11 November 2026
+
+The published `test_i2_s_gemv_rows.py` exercised 1, 4, 16, 17 and 32 weight rows at inner dimensions 128, 256 and 4096. All **30 configurations** (15 per AVX2/scalar build) passed encoded-dot parity, including both sides of the 16-row batching boundary. Across the published focused suites, the verified total is 68 configuration checks: 20 packing/single-row GEMV, 18 GEMM and 30 batched GEMV. This is kernel-level numerical evidence, not full-model or production acceptance.
+
+## Bounded CPU kernel microbenchmark — 11 November 2026
+
+The published `benchmark_i2_s_gemm.py` was retrieved from GitHub and run with `nice -n 19` against both locally built CPU backends. Each configuration used three warmups and 15 timed samples, with 8 weight rows and 8 activation columns. The measured **median kernel call latency** was:
+
+| Inner dimension | AVX2 | Scalar |
+| --- | ---: | ---: |
+| 128 | 2.20 µs | 31.90 µs |
+| 512 | 2.50 µs | 128.90 µs |
+| 4096 | 4.40 µs | 1022.61 µs |
+
+These are short, host-dependent microbenchmarks, not end-to-end inference throughput, CPU consumption, model quality or a release criterion. The scalar 4096-element samples were variable (minimum 621.80 µs); reproduce on a stable isolated host before making architecture-level performance decisions. No inference defaults were changed.
+
+## Signed activation stress — 11 November 2026
+
+The published `test_i2_s_signed_extremes.py` passed 10 additional GEMM configurations (five signed activation magnitudes × AVX2 and scalar). The magnitudes 3, 31, 63, 100 and 127 exercise the upper signed-int8 range at inner dimension 4096. All 4×4 output cells matched the integer encoded-dot reference. The cumulative focused configuration count is now **78** (68 prior plus 10 signed-int8 stress cases). No suitable full BitNet I2_S model artifact was located in the bounded local model search; model-level qualification is still outstanding.
+
+## Maximum-positive accumulation — 11 November 2026
+
+Published `test_i2_s_max_positive.py` was retrieved from the PR branch and passed on both AVX2 and scalar builds at inner dimensions 128 and 4096. Every 4×4 output cell matched encoded reference values 32,512 and 1,040,384 respectively. This adds four passing kernel configurations, for **82** focused configurations in total. The current PR has no submitted independent GitHub review. The established owned reviewer route must independently assess the exact PR head; numerical tests are not a substitute for semantic approval.
+
+## Non-repacked matmul row-boundary defect — 11 November 2026
+
+Source inspection identified an out-of-bounds final weight-row tile in `ggml-cpu.c`: the non-repacked I2_S fast path rounded `src0_end` upwards to a four-row boundary without clamping to `ne01`. For five physical rows, this could request eight rows. The pinned-source patch now applies `src0_end = MIN(src0_end, ne01)` before the empty-range check, preserving the physical row boundary. The published `test_i2_s_row_bounds.py` passed **528** deterministic row-partition configurations (1–33 rows × 1–16 threads), checking exact coverage and bounds. Both AVX2 and scalar `ggml-cpu` libraries rebuilt successfully; the 18 previously published GEMM parity configurations passed again. Fresh original pinned source was patched independently: `quants.c` and `ggml-cpu-i2s.c` matched the qualified sources byte-for-byte, while `ggml-cpu.c` differed only by the two explanatory comments accompanying the same clamp. This test verifies the row partition algorithm and source guard, not an end-to-end model execution.
+
+## First real-model execution — 11 November 2026
+
+Retrieved the official `microsoft/bitnet-b1.58-2B-4T-gguf` `ggml-model-i2_s.gguf` (1,187,801,280 bytes) into the isolated qualification build directory, SHA-256 `4221b252fdd5fd25e15847adfeb5ee88886506ba50b8a34548374492884c2162`. Built `llama-cli` against the locally corrected CPU source with Miniconda and an explicit system `libgomp` link path. A first CLI run reached an interactive prompt and exceeded the bounded job duration; the corrected `--single-turn --simple-io` invocation exited successfully with 2 CPU threads, context 512 and 16 generated tokens. Observed reported rates were **30.6 prompt tokens/s** and **7.2 generated tokens/s** on this host. For the prompt `Write the word READY.`, the output was `Write the word READY / The word: 3 / 3 / I:` rather than a compliant answer. Thus **model load and generation are verified**, but **instruction-following quality is not qualified**. This is one short smoke sample, not a model capability verdict. No model or runtime default was changed; artifact is isolated in the qualification workspace.
+
+A second single-turn smoke used the model's conversation mode with `Reply with exactly READY.` and 48 generated tokens. The model responded repetitively (`I'm ready to help...`) rather than exactly `READY`; observed rates were 30.1 prompt tokens/s and 6.7 generation tokens/s. This establishes that the initial noncompliant result was not solely due to omitting conversation mode. The official artifact loads and generates on the corrected CPU build, but strict instruction-following has not met even this minimal probe. A complete independent acceptance suite and reviewer approval remain required; no production activation.
+
+## Deterministic model acceptance probe — 11 November 2026
+
+Ran the official SHA-256-pinned I2_S GGUF on the locally corrected `llama-cli` with CPU-only execution, two threads, 512-token context, `--conversation --single-turn --simple-io --no-warmup --temp 0 --seed 42`, and at most 48 generated tokens per case. Four independently bounded cases all exited normally but **failed functional acceptance**:
+
+| Case | Expected | Observed |
+| --- | --- | --- |
+| Exact instruction | `READY` only | Repetitive explanation instead |
+| Arithmetic | `12` only for 7+5 | `10` repeated |
+| JSON | exactly `{"ok":true}` | malformed/repeated JSON fragments |
+| Python coding | function `square(x)` returning `x*x` | repeated prompt rather than code |
+
+Execution times were 18.53, 9.78, 9.60, and 9.82 seconds, respectively, in this bounded host run. This is **0/4 functional acceptance**, not evidence of general model quality or proof of the failure's root cause. Do not promote this BitNet I2_S artifact to the CPU coding-agent backend, or degrade existing model capabilities to make it pass. Preserve the independently verified kernel fixes for source review. The exact CLI outputs are in the isolated qualification workspace at `build-cpu-qualification/bitnet-deterministic-acceptance.json`. Further work must isolate model-versus-runtime causes before any production proposal.
+
+## Scalar full-model comparison — 11 November 2026
+
+Built an independent `llama-cli` against the existing scalar CPU build using the same corrected source and official SHA-256-pinned I2_S model. The first 48-token scalar arithmetic comparison exceeded the bounded 160-second run after starting generation. A second deterministic run with `--temp 0 --seed 42 --conversation --single-turn --simple-io --no-warmup -t 2 -c 512 -n 6` completed and emitted `7 + 5` rather than `12` for `What is 7 + 5? Reply with only the number.`. Reported scalar rates were approximately **0.2 prompt tokens/s** and **0.2 generated tokens/s**, compared with the previous AVX2 run at approximately 30 prompt tokens/s and 6–7 generated tokens/s. This confirms noncompliant model behavior is **not exclusive to the AVX2 backend**; however, unequal generated-token limits and output differences mean this is not yet a bitwise cross-backend parity test or a root-cause determination. CPU-only host execution remained isolated; no production model was replaced.
+
+## Embedded GGUF chat-template isolation — 11 November 2026
+
+Inspected the actual 24-key metadata of the official pinned `ggml-model-i2_s.gguf` (architecture `bitnet-b1.58`, tokenizer `gpt2`). Its embedded `tokenizer.chat_template` constructs a user turn as `Human: <message>\\n\\nBITNETAssistant: <eos_token>`, placing EOS immediately after the assistant prefix. Published an **experimental, opt-in** template `bitnet-chat-template-no-premature-eos.jinja` that omits this EOS from the user turn and preserves EOS for completed assistant messages. The production model metadata and default runtime configuration were not modified.
+
+Using the same AVX2 CPU executable, model, two threads, temperature zero, seed 42, and conversation mode: the arithmetic probe improved from a repeated incorrect `10` to `7 + 5 = 12`, **but continued generating unwanted text**. A second probe `Reply with exactly READY.` generated `1. 2. 3. 4. 5. 6. 7. 8.` instead. Therefore the template is a plausible contributing defect, **not a complete correction**; both strict-response probes still fail acceptance. Do not enable this experimental template globally. Investigate whether the reference implementation intentionally uses EOS at this position and compare token-level logits/output with the official implementation before deciding on a canonical template change.
+
+## Matched AVX2 versus scalar generation — 11 November 2026
+
+Re-ran the arithmetic prompt on **both** compiled CPU backends with identical model, embedded chat template, seed 42, temperature zero, two threads, context 512, six generated tokens, `--conversation --single-turn --simple-io --no-warmup`. Both emitted the same visible six-token continuation `: 7 + 5`, confirming matching decoded output for this bounded prompt. Observed AVX2 rates were 27.0 prompt tokens/s and 7.5 generated tokens/s; scalar previously measured ~0.2 tokens/s for each. This eliminates a backend-specific decoded-output discrepancy **for this case only**; it does not establish equal internal logits, correct model arithmetic, or equivalence to official reference inference.
+
+The official `microsoft/BitNet` `run_inference.py` uses `llama-cli` and passes the user prompt with optional `-cnv`, default temperature 0.8; it does not prescribe an alternate fixed chat template. A token-level comparison against a separately built, pinned official reference implementation remains outstanding.
+
+## Independent official-source reference executable — 11 November 2026
+
+Prepared an **isolated, unmodified reference source tree** from the official `microsoft/BitNet` main commit `0b341e582afbf9e1011f24744b554c96a3477eb5` and its exact pinned `isHuangXin/llama.cpp` submodule commit `390c307752ab78fd8189f359d6954c9ba1be74af`. Built the reference `llama-cli` with the same userspace Miniconda compilers and a single low-priority build job. This executable does **not** include our I2_S quantization, dot-product, GEMM or row-boundary corrections. Its isolated directory is `$HOME/webapp/.local/bitnet-official-reference-20261111`; it did not change production configuration.
+
+Against the exact same official model artifact, prompt `What is 7 + 5? Reply with only the number.`, two threads, context 512, seed 42, temperature zero, conversation mode, six tokens, and no warmup, the **unmodified official reference and corrected AVX2 and scalar implementations all emitted the same decoded continuation `: 7 + 5`**. The reference reported 3.1 prompt tokens/s and 2.2 generated tokens/s; corrected AVX2 reported 27.0 and 7.5 respectively (non-controlled host measurements, not a formal speedup claim). This establishes reference-level *decoded-output parity for this bounded case*, not full token/logit parity or model-level acceptance.
+
+Applied the **same opt-in corrected chat template** to the unmodified reference binary. It also produced `7 + 5 = 12` followed by unwanted continuation. The template-related improvement therefore **reproduces in official source** and is not specific to our kernel changes. The default GGUF metadata still embeds EOS after the user/assistant prefix, but its intended training-time semantics remain to be independently established before proposing a permanent correction.
+
+**Disposition:** the observed arithmetic and strict-output defects are reproducible with official source. Preserve source-level kernel correctness changes and independent review route, but do not claim these changes caused or solved model instruction-following failure. Full functional suite, reviewer approval and approved integration remain outstanding.
+
+## Additional reference parity and bounded arithmetic check — 11 November 2026
+
+With the **same experimental no-premature-EOS template**, identical official model, two CPU threads, context 512, temperature zero, seed 42, and 12-token generation, the unmodified official reference and corrected AVX2 build **both emitted `1. 2. 3. 4.`** for `Reply with exactly READY.`. This independently reproduces the noncompliant instruction response in the reference source, beyond the arithmetic prompt. Reported prompt/generation rates: official reference 3.5/1.5 tokens/s, corrected AVX2 24.3/4.9 tokens/s in these individual runs.
+
+An exploratory change to widen four AVX2 I2_S partial products from 16-bit to 32-bit was **reverted before acceptance** after checking the encoded-domain bound: each `maddubs` pair has magnitude at most `2 * 127 * 2 = 508`, and four such pairs sum to at most `2032`, well within signed int16. There was no demonstrated overflow; widening would add unnecessary instructions. The published patch script was restored byte-for-byte to its prior version in commit `cba9016da9c0febf2fa38a60541f318c3fcdd1cf`, the isolated runtime CPU library rebuilt, and no production changes made. This bound applies to the I2_S encoded values 0–2 and int8 activations; it is not a general AVX2 overflow claim.
+
+## Post-rebuild acceptance rerun — 11 November 2026
+
+After restoring the published three-file patch and rebuilding the isolated AVX2 CPU library, re-ran five executable focused test scripts against **both** AVX2 and scalar shared libraries: `test_i2_s_roundtrip.py` (10 PASS lines), `test_i2_s_gemm.py` (9), `test_i2_s_gemv_rows.py` (15), `test_i2_s_signed_extremes.py` (5), and `test_i2_s_max_positive.py` (2). All **41 executable cases per backend (82 total)** passed again. The row-boundary static coverage test also completed in the isolated source root; it reports the 528 partition configurations in its own test output. An initial invocation of that static test from a different working directory failed to locate the expected source path; re-running from the source root succeeded. This was a test invocation/path issue, not a kernel failure.
+
+The current repository has **no configured GitHub Actions workflows** and PR #1 has **zero submitted reviews**. The existing owned semantic reviewer implementation in the separate review-worker workspace requires a pinned local model, an exact PR-diff manifest, and independently authorized approval; it does not grant self-approval. Source corrections remain proposed pending that route's legitimate activation for this repository. No paid CI or production deployment was initiated.
+
+## GEMV tail memory-safety correction — 11 November 2026
+
+Discovered an additional concrete out-of-bounds defect in the pinned upstream I2_S `ggml_gemv_i2_i8_s`: its non-`ACT_PARALLEL` dispatch increments by 16 rows and always calls `ggml_vec_dot_i2_i8_s(..., nrc=16)`, including the final partial block. The called vector-dot routine iterates all `nrc` rows, so any final block of 1–15 physical rows could read beyond packed weights and write beyond the output tensor. Corrected the source patch to pass `min(16, nc-iir0)` to the final dispatch; exact pinned-source patch application and isolated AVX2 rebuild succeeded. All five existing executable test scripts passed again (41 AVX2 cases).
+
+Added `qualification/i2s/test_i2_s_gemv_tail_canary.py` with exact-sized weight arrays and output canaries for 11 row counts (1,2,3,5,15,16,17,18,31,32,33). **11/11 AVX2 and 11/11 scalar output-canary checks passed**. The canary test detects output overruns; it is **not** a substitute for ASan/Valgrind validation of weight reads. This change is source-only and has not been deployed or independently approved.
+
+## AddressSanitizer and UndefinedBehaviorSanitizer verification — 11 November 2026
+
+Built a separate isolated CPU-only ggml shared library from the patched pinned source with `GGML_SANITIZE_ADDRESS=ON` and `GGML_SANITIZE_UNDEFINED=ON` using the owned Miniconda toolchain, one low-priority build worker, and no production deployment. The first Python ctypes invocation exposed a userspace linker/runtime dependency (`GOMP_atomic_end` unresolved in `libggml-base`); reran with the system `libgomp.so.1` preloaded alongside the toolchain `libasan.so`. No source or kernel change was necessary.
+
+With `ASAN_OPTIONS=detect_leaks=0:halt_on_error=1` and `UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1`, the instrumented CPU library passed the full **41 executable kernel cases** (10 roundtrip, 9 GEMM, 15 GEMV, 5 signed extremes, 2 max-positive) and all **11 exact-sized GEMV tail output-canary cases**. No ASan or UBSan diagnostic occurred in these runs. Leak detection was deliberately disabled because tests load the shared library into the Python interpreter; this result establishes tested memory/UB coverage, not an exhaustive proof of all tensor shapes or host configurations.
+
+Reproduction uses `$HOME/webapp/.local/bitnet-cpu-qualification-20261110/build-cpu-asan/bin/libggml-cpu.so` and the published tests. Set `BITNET_GGML_CPU_LIB` to that shared library; preload `$HOME/webapp/miniconda/lib/gcc/x86_64-conda-linux-gnu/16.2.0/libasan.so:/usr/lib64/libgomp.so.1`. The test output and CMake logs remain in the isolated qualification workspace.
