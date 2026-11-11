@@ -52,3 +52,7 @@ The published `benchmark_i2_s_gemm.py` was retrieved from GitHub and run with `n
 | 4096 | 4.40 µs | 1022.61 µs |
 
 These are short, host-dependent microbenchmarks, not end-to-end inference throughput, CPU consumption, model quality or a release criterion. The scalar 4096-element samples were variable (minimum 621.80 µs); reproduce on a stable isolated host before making architecture-level performance decisions. No inference defaults were changed.
+
+## Signed activation stress — 11 November 2026
+
+The published `test_i2_s_signed_extremes.py` passed 10 additional GEMM configurations (five signed activation magnitudes × AVX2 and scalar). The magnitudes 3, 31, 63, 100 and 127 exercise the upper signed-int8 range at inner dimension 4096. All 4×4 output cells matched the integer encoded-dot reference. The cumulative focused configuration count is now **78** (68 prior plus 10 signed-int8 stress cases). No suitable full BitNet I2_S model artifact was located in the bounded local model search; model-level qualification is still outstanding.
